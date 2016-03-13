@@ -18,12 +18,9 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
+import copy
 import sys
-import datetime
-import traceback
 import re
-import shlex
-import os
 
 DOCUMENTATION = '''
 ---
@@ -53,11 +50,24 @@ author: Michael DeHaan
 
 EXAMPLES = '''
 # Example from Ansible Playbooks
-- command: /sbin/shutdown -t now
-
-# Run the command if the specified file does not exist
-- command: /usr/bin/make_database.sh arg1 arg2
+- pacemaker: primitive vip_neutron ocf:heartbeat:IPaddr2 params ip="1.2.3.4" cidr_netmask="32" nic="eth0"
+      op monitor timeout=120 interval=60
+      op start timeout=60 interval=0
+      op stop timeout=60 interval=0
+      meta resource-stickiness=1 is-managed=true target-role=Started
 '''
+
+# Dict of options and their defaults
+OPTIONS = {
+    'state': 'present',
+    'shadow': None,
+}
+
+OPTIONS_REGEX = '|'.join(OPTIONS.keys())
+PARAM_REGEX = re.compile(
+r'(^|\s)(' + OPTIONS_REGEX +
+r')=(?P<quote>[\'"])?(.*?)(?(quote)(?<!\\)(?P=quote))((?<!\\)(?=\s)|$)'
+)
 
 
 REX = re.compile(
@@ -118,11 +128,13 @@ class PrimitiveParser(BaseParser):
                 if (arg == "op"):
                     op_type = args.pop(0)
                 continue
-    
+
             if '=' not in arg:
                 raise Exception("no key=value option: %s" % arg)
 
             key, value = arg.split("=")
+            value = unquote(value)
+
             if key == "":
                 self.module.fail_json(
                     rc=258, msg="no key in key=value option")
@@ -211,11 +223,13 @@ class CloneParser(BaseParser):
             if (arg in ["params", "meta"]):
                 mode = arg
                 continue
-    
+
             if mode is None:
                 self.module.fail_json(rc=258, msg="no params or meta")
-    
+
             key, value = arg.split("=")
+            value = unquote(value)
+
             if key == "":
                 self.module.fail_json(
                     rc=258,
@@ -224,10 +238,11 @@ class CloneParser(BaseParser):
                 self.module.fail_json(
                     rc=258,
                     msg="no value in key=value option (key=%s)" % key)
+
             if mode not in ret:
                 ret[mode] = {}
             ret[mode][key] = value
-    
+
         return ret
 
 
@@ -328,7 +343,7 @@ class PropertyParser(BaseParser):
 
         if args[0].startswith("cib-bootstrap-options:"):
             args.pop(0)
-    
+
         while (args):
             arg = args.pop(0)
             if '=' not in arg:
@@ -336,7 +351,7 @@ class PropertyParser(BaseParser):
                     rc=258,
                     msg="no key-value :%s" % arg)
             key, value = arg.split("=")
-    
+
             if key == "":
                 self.module.fail_json(
                     rc=258,
@@ -346,7 +361,7 @@ class PropertyParser(BaseParser):
                     rc=258,
                     msg="no value in key=value option (key=%s)" % key)
             ret[key] = value
-    
+
         return ret
 
 
@@ -380,17 +395,16 @@ class FencingTopologyParser(BaseParser):
                 newfence.append(arg)
         if newnode:
             ret[newnode] = newfence
-    
+
         return ret
 
 
 def splitter(args):
     ret = []
     for a, b, c, d in REX.findall(args):
-        if len(b) == 0:
-            ret.append(a)
-        else:
-            ret.append(a+b)
+        arg = a if len(b) == 0 else a + b
+        arg = unquote(arg)
+        ret.append(arg)
     return ret
 
 
@@ -437,36 +451,52 @@ class CIBParser(object):
                 new_line = ""
         return cibs
 
-
 def main():
 
     module = AnsibleModule(
         argument_spec={
-            'resource': dict(required=True),
+            'resource': dict(),
             'state': dict(default='present', choices=['present', 'absent']),
-            'commit': dict(default=True, type='bool', choices=BOOLEANS),
+            'shadow': dict(),
+            'commit': dict(default=False, type='bool', choices=BOOLEANS),
         },
         supports_check_mode=True
     )
 
     state = module.params['state']
-    need_commit = module.params['commit']
+    commit = module.params['commit']
+    shadow = module.params['shadow']
+
+    # TODO
+    # * shadow mib creation?
+    # * parameter checks
+    #   valid calls: 
+    #   resource
+    #   shadow & commit
+
     args = splitter(module.params['resource'])
     changed = False
 
     if len(args) == 0:
         module.fail_json(rc=256, msg="no command given")
+    if commit:
+        if not shadow:
+            self.fail_json(rc=256, msg="shadow= is required for commit")
 
-    if args[0] == "commit":
-        rc, out, err = module.run_command(["crm", "configure", "commit"])
+        rc, out, err = module.run_command(["crm", "cib", "commit", shadow])
         if rc:
             module.fail_json(rc=256, msg="crm command failed", out=out, err=err)
+
         module.exit_json(args=args, changed=True)
 
     parser = CIBParser(module)
     new = parser.parse_cib(args)
 
-    crm_args = ["crm", "configure", "show"]
+    if shadow:
+        crm_args = ["crm", "-c", shadow, "configure", "show"]
+    else:
+        crm_args = ["crm", "configure", "show"]
+
     rc, out, err = module.run_command(crm_args)
     if rc:
         module.fail_json(rc=256, msg="crm configure show failed", out=out, err=err)
@@ -504,18 +534,21 @@ def main():
         crm_config_commands.append(["configure", "delete", new.id])
     if need_append:
         crm_config_commands.append(["configure"] + args)
-    if need_commit:
-        crm_config_commands.append(["configure", "commit"])
-    if not module.check_mode:
-        for command in crm_config_commands:
-            rc, out, err = module.run_command(["crm", "-F", "-w"] + command)
-            if rc:
-                module.fail_json(rc=256, msg="crm -F -w %s failed" % ' '.join(command), out=out, err=err)
+
+    cmd_prefix = ["crm", "-F", "-w"]
+    if shadow:
+        cmd_prefix.extend(["-c", shadow])
+
+    for command in crm_config_commands:
+        rc, out, err = module.run_command(cmd_prefix + command)
+        if rc:
+            module.fail_json(rc=256, msg="crm -F -w %s failed" % ' '.join(command), out=out, err=err)
 
     module.exit_json(args=args, old=old_cib, new=new.cib, changed=True)
 
 
 # import module snippets
 from ansible.module_utils.basic import *
+from ansible.module_utils.splitter import *
 
 main()
