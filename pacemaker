@@ -71,6 +71,7 @@ class BaseParser(object):
     partial_compare = False
     module = None
     no_delete = False
+    resource = True
 
     def __init__(self, args, module=None):
         if module:
@@ -118,7 +119,7 @@ class PrimitiveParser(BaseParser):
                 if (arg == "op"):
                     op_type = args.pop(0)
                 continue
-    
+
             if '=' not in arg:
                 raise Exception("no key=value option: %s" % arg)
 
@@ -211,10 +212,10 @@ class CloneParser(BaseParser):
             if (arg in ["params", "meta"]):
                 mode = arg
                 continue
-    
+
             if mode is None:
                 self.module.fail_json(rc=258, msg="no params or meta")
-    
+
             key, value = arg.split("=")
             if key == "":
                 self.module.fail_json(
@@ -227,7 +228,7 @@ class CloneParser(BaseParser):
             if mode not in ret:
                 ret[mode] = {}
             ret[mode][key] = value
-    
+
         return ret
 
 
@@ -241,6 +242,7 @@ class RscTemplateParser(PrimitiveParser):
 
 class LocationParser(BaseParser):
     id_name = "id"
+    resource = False
 
     def parse(self, args):
         argscopy = list(args)
@@ -328,7 +330,7 @@ class PropertyParser(BaseParser):
 
         if args[0].startswith("cib-bootstrap-options:"):
             args.pop(0)
-    
+
         while (args):
             arg = args.pop(0)
             if '=' not in arg:
@@ -336,7 +338,7 @@ class PropertyParser(BaseParser):
                     rc=258,
                     msg="no key-value :%s" % arg)
             key, value = arg.split("=")
-    
+
             if key == "":
                 self.module.fail_json(
                     rc=258,
@@ -346,7 +348,7 @@ class PropertyParser(BaseParser):
                     rc=258,
                     msg="no value in key=value option (key=%s)" % key)
             ret[key] = value
-    
+
         return ret
 
 
@@ -380,7 +382,7 @@ class FencingTopologyParser(BaseParser):
                 newfence.append(arg)
         if newnode:
             ret[newnode] = newfence
-    
+
         return ret
 
 
@@ -500,7 +502,8 @@ def main():
 
     crm_config_commands = []
     if need_delete:
-        crm_config_commands.append(["resource", "stop", new.id])
+        if new.resource:
+            crm_config_commands.append(["resource", "stop", new.id])
         crm_config_commands.append(["configure", "delete", new.id])
     if need_append:
         crm_config_commands.append(["configure"] + args)
