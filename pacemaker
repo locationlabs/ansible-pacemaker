@@ -480,13 +480,15 @@ def main():
 
     is_same = None
     old_cib = None
+    debug.append("Checking new command: %s, id: %s" % (new.command, new.id))
     for cur in parser.parse_cibs(out.splitlines()):
-        #debug.append("old command: %s, id: %s" % (cur.command, cur.id))
+        debug.append("Checking cur command: %s, id: %s" % (cur.command, cur.id))
         if new.command != cur.command:
             continue
         if new.id != cur.id:
             continue
         old_cib = cur.cib
+        #debug.append("Checking is_same for cur command: %s, id: %s" % (cur.command, cur.id))
         is_same = new.is_same(cur)
         break
 
@@ -522,7 +524,7 @@ def main():
         for command in crm_config_commands:
             rc, out, err = module.run_command(["crm", "-F", "-w"] + command)
             if rc:
-                module.fail_json(rc=256, msg="crm -F -w %s failed" % ' '.join(command), out=out, err=err)
+                module.fail_json(rc=256, msg="crm -F -w %s failed" % ' '.join(command), out=out, err=err, debug=debug)
 
     module.exit_json(args=args, old=old_cib, new=new.cib, debug=debug, changed=True)
 
