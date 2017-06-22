@@ -321,18 +321,21 @@ class OrderParser(BaseParser):
 
 
 class PropertyParser(BaseParser):
+    id_name = "id"
     partial_compare = True
     no_delete = True
 
     def parse(self, args):
         ret = dict(
             command=args.pop(0),
+            id=args.pop(0),
             )
-        if args[0].startswith("$id"):
-            args.pop(0)
-
-        if args[0].startswith("cib-bootstrap-options:"):
-            args.pop(0)
+        # args.pop(0)
+        # if args[0].startswith("$id"):
+        #     args.pop(0)
+        #
+        # if args[0].startswith("cib-bootstrap-options:"):
+        #     args.pop(0)
 
         while (args):
             arg = args.pop(0)
@@ -421,8 +424,8 @@ class CIBParser(object):
 
     def parse_cib(self, args):
         if args[0] in self.cib_parser_class:
-            return self.cib_parser_class[args[0]]\
-                    (args[:], module=self.module)
+            # This will instantiate the appropriate Parser class.
+            return self.cib_parser_class[args[0]](args[:], module=self.module)
         return None
 
     def parse_cibs(self, lines):
