@@ -465,9 +465,10 @@ def main():
         module.fail_json(rc=256, msg="no command given")
 
     if args[0] == "commit":
-        rc, out, err = module.run_command(["crm", "configure", "commit"])
-        if rc:
-            module.fail_json(rc=256, msg="crm command failed", out=out, err=err)
+        if not module.check_mode:
+            rc, out, err = module.run_command(["crm", "configure", "commit"])
+            if rc:
+                module.fail_json(rc=256, msg="crm command failed", out=out, err=err)
         module.exit_json(args=args, changed=True)
 
     parser = CIBParser(module)
